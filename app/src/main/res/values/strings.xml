@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">OnDesk</string>
+    <string name="accessibility_service_description">Allow remote control via LAN</string>
+</resources>
