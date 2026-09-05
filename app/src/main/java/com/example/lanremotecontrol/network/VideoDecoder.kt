@@ -4,7 +4,8 @@ import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
 import android.view.Surface
-import java.io.DataInputStream
+import java.net.DatagramPacket
+import java.nio.ByteBuffer
 
 class VideoDecoder {
 
@@ -21,6 +22,21 @@ class VideoDecoder {
 
     // NEW: Callback to tell ViewModel connection died
     var onDisconnect: (() -> Unit)? = null
+    var onFirstFrameReceived: (() -> Unit)? = null
+    private var hasFiredFirstFrame = false
+
+    // ABR stats
+    private var framesExpected = 0
+    private var framesReceived = 0
+
+    fun getAndResetDropRate(): Float {
+        if (framesExpected == 0) return 0f
+        val expected = framesExpected
+        val received = framesReceived
+        framesExpected = 0
+        framesReceived = 0
+        return (expected - received) / expected.toFloat()
+    }
 
     fun setSurface(surface: Surface?) {
         currentSurface = surface
@@ -36,94 +52,136 @@ class VideoDecoder {
     fun start() {
         if (isRunning) return
         isRunning = true
+        hasFiredFirstFrame = false
 
         Thread {
-            val socket = SocketManager.getSocket()
-            if (socket == null) {
+            val udpSocket = SocketManager.getUdpSocket()
+            if (udpSocket == null) {
                 onDisconnect?.invoke()
                 return@Thread
             }
 
             try {
-                val inputStream = DataInputStream(socket.getInputStream())
-                Log.d("VideoDecoder", "Loop Started")
+                Log.d("VideoDecoder", "UDP Loop Started")
 
-                while (isRunning && socket.isConnected) {
+                var currentFrameId: Long = -1
+                var expectedChunks = -1
+                val receivedChunks = mutableMapOf<Int, ByteArray>()
+                var currentFlags = 0
 
-                    // 1. READ FRAME SIZE
-                    val frameSize = try {
-                        inputStream.readInt()
+                val buffer = ByteArray(65535)
+
+                while (isRunning && !udpSocket.isClosed) {
+                    val packet = DatagramPacket(buffer, buffer.size)
+
+                    try {
+                        udpSocket.receive(packet)
                     } catch (e: Exception) {
-                        // Socket closed or error -> Disconnect
-                        throw e
+                        break // Socket closed
                     }
 
-                    // 2. CHECK FOR RESTART MARKER (-1)
-                    if (frameSize == -1) {
-                        synchronized(lock) {
-                            stopCodecInternal()
-                            nextConfig?.let {
-                                currentWidth = it.width
-                                currentHeight = it.height
-                                nextConfig = null
-                            }
+                    val byteBuffer = ByteBuffer.wrap(packet.data, 0, packet.length)
+                    if (packet.length < 16) continue // Invalid packet
+
+                    val frameId = byteBuffer.long
+                    val flags = byteBuffer.int
+                    val totalChunks = byteBuffer.short.toInt()
+                    val chunkIndex = byteBuffer.short.toInt()
+
+                    if (frameId != currentFrameId) {
+                        if (currentFrameId != -1L) {
+                            framesExpected++
                         }
-                        continue
+                        // New frame started, drop old incomplete frame if any
+                        currentFrameId = frameId
+                        expectedChunks = totalChunks
+                        currentFlags = flags
+                        receivedChunks.clear()
                     }
 
-                    // 3. READ FLAGS
-                    val flags = try {
-                        inputStream.readInt()
-                    } catch (e: Exception) { throw e }
+                    val payloadSize = byteBuffer.remaining()
+                    val payload = ByteArray(payloadSize)
+                    byteBuffer.get(payload)
 
-                    if (frameSize < 0 || frameSize > 2000000) continue
+                    receivedChunks[chunkIndex] = payload
 
-                    // 4. READ DATA
-                    val frameData = ByteArray(frameSize)
-                    inputStream.readFully(frameData)
+                    if (receivedChunks.size == expectedChunks) {
+                        framesReceived++
+                        // Frame complete!
+                        var totalSize = 0
+                        for (i in 0 until expectedChunks) {
+                            totalSize += receivedChunks[i]?.size ?: 0
+                        }
 
-                    // 5. DECODE
-                    val surface = currentSurface
-                    if (surface != null && surface.isValid) {
-                        synchronized(lock) {
-                            if (mediaCodec == null) {
-                                try {
-                                    val format = MediaFormat.createVideoFormat("video/avc", currentWidth, currentHeight)
-                                    format.setInteger(MediaFormat.KEY_PUSH_BLANK_BUFFERS_ON_STOP, 1)
-                                    mediaCodec = MediaCodec.createDecoderByType("video/avc")
-                                    mediaCodec?.configure(format, surface, null, 0)
-                                    mediaCodec?.start()
-                                } catch (e: Exception) {
-                                    Log.e("VideoDecoder", "Init Failed", e)
+                        val completeFrame = ByteArray(totalSize)
+                        var offset = 0
+                        for (i in 0 until expectedChunks) {
+                            val chunk = receivedChunks[i]!!
+                            System.arraycopy(chunk, 0, completeFrame, offset, chunk.size)
+                            offset += chunk.size
+                        }
+
+                        receivedChunks.clear()
+
+                        // Check for resolution updates
+                        if (nextConfig != null) {
+                            synchronized(lock) {
+                                stopCodecInternal()
+                                nextConfig?.let {
+                                    currentWidth = it.width
+                                    currentHeight = it.height
+                                    nextConfig = null
                                 }
                             }
+                        }
 
-                            val codec = mediaCodec
-                            if (codec != null) {
-                                try {
-                                    val inputIndex = codec.dequeueInputBuffer(10000)
-                                    if (inputIndex >= 0) {
-                                        val buffer = codec.getInputBuffer(inputIndex)
-                                        buffer?.clear()
-                                        buffer?.put(frameData)
-                                        codec.queueInputBuffer(inputIndex, 0, frameSize, 0, flags)
+                        // Decode Frame
+                        val surface = currentSurface
+                        if (surface != null && surface.isValid) {
+                            synchronized(lock) {
+                                if (mediaCodec == null) {
+                                    try {
+                                        val format = MediaFormat.createVideoFormat("video/avc", currentWidth, currentHeight)
+                                        format.setInteger(MediaFormat.KEY_PUSH_BLANK_BUFFERS_ON_STOP, 1)
+                                        mediaCodec = MediaCodec.createDecoderByType("video/avc")
+                                        mediaCodec?.configure(format, surface, null, 0)
+                                        mediaCodec?.start()
+                                    } catch (e: Exception) {
+                                        Log.e("VideoDecoder", "Init Failed", e)
                                     }
+                                }
 
-                                    val bufferInfo = MediaCodec.BufferInfo()
-                                    var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                                    while (outputIndex >= 0) {
-                                        codec.releaseOutputBuffer(outputIndex, true)
-                                        outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                                val codec = mediaCodec
+                                if (codec != null) {
+                                    try {
+                                        val inputIndex = codec.dequeueInputBuffer(10000)
+                                        if (inputIndex >= 0) {
+                                            val inputBuffer = codec.getInputBuffer(inputIndex)
+                                            inputBuffer?.clear()
+                                            inputBuffer?.put(completeFrame)
+                                            codec.queueInputBuffer(inputIndex, 0, completeFrame.size, 0, currentFlags)
+                                        }
+
+                                        val bufferInfo = MediaCodec.BufferInfo()
+                                        var outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                                        while (outputIndex >= 0) {
+                                            if (!hasFiredFirstFrame) {
+                                                hasFiredFirstFrame = true
+                                                onFirstFrameReceived?.invoke()
+                                            }
+                                            codec.releaseOutputBuffer(outputIndex, true)
+                                            outputIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+                                        }
+                                    } catch (e: Exception) {
+                                        stopCodecInternal()
                                     }
-                                } catch (e: Exception) {
-                                    stopCodecInternal()
                                 }
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Log.e("VideoDecoder", "Stream Ended / Error: ${e.message}")
+                Log.e("VideoDecoder", "UDP Stream Ended / Error", e)
                 // Trigger Disconnect on Main Thread (via ViewModel)
                 onDisconnect?.invoke()
             } finally {

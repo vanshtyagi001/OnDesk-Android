@@ -16,14 +16,22 @@ fun StreamSettingsDialog(
     currentFullscreenState: Boolean,
     currentScaleX: Float,
     currentScaleY: Float,
+    isAspectLocked: Boolean,
+    showBorder: Boolean,
+    showLatency: Boolean,
     onFullscreenChange: (Boolean) -> Unit,
     onScaleChange: (Float, Float) -> Unit,
-    onOpenCalibration: () -> Unit,
+    onAspectLockChange: (Boolean) -> Unit,
+    onBorderChange: (Boolean) -> Unit,
+    onLatencyChange: (Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
     var isFullscreen by remember { mutableStateOf(currentFullscreenState) }
     var scaleX by remember { mutableStateOf(currentScaleX) }
     var scaleY by remember { mutableStateOf(currentScaleY) }
+    var locked by remember { mutableStateOf(isAspectLocked) }
+    var border by remember { mutableStateOf(showBorder) }
+    var latency by remember { mutableStateOf(showLatency) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -69,6 +77,40 @@ fun StreamSettingsDialog(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Show Video Border", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = border,
+                        onCheckedChange = {
+                            border = it
+                            onBorderChange(it)
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Show Network Latency", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = latency,
+                        onCheckedChange = {
+                            latency = it
+                            onLatencyChange(it)
+                        }
+                    )
+                }
+
                 // FIX: Use HorizontalDivider
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
 
@@ -79,35 +121,76 @@ fun StreamSettingsDialog(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Width Stretch", style = MaterialTheme.typography.bodySmall)
-                    Text("${String.format(Locale.US, "%.2f", scaleX)}x", style = MaterialTheme.typography.bodySmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Lock Aspect Ratio", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = locked,
+                        onCheckedChange = {
+                            locked = it
+                            onAspectLockChange(it)
+                            if (it) {
+                                // Sync scales to the average when locked
+                                val avg = (scaleX + scaleY) / 2f
+                                scaleX = avg
+                                scaleY = avg
+                                onScaleChange(avg, avg)
+                            }
+                        }
+                    )
                 }
-                Slider(
-                    value = scaleX,
-                    onValueChange = {
-                        scaleX = it
-                        onScaleChange(scaleX, scaleY)
-                    },
-                    valueRange = 0.5f..2.5f,
-                    modifier = Modifier.height(20.dp)
-                )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Height Stretch", style = MaterialTheme.typography.bodySmall)
-                    Text("${String.format(Locale.US, "%.2f", scaleY)}x", style = MaterialTheme.typography.bodySmall)
+                if (locked) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Overall Scale", style = MaterialTheme.typography.bodySmall)
+                        Text("${String.format(Locale.US, "%.2f", scaleX)}x", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Slider(
+                        value = scaleX,
+                        onValueChange = {
+                            scaleX = it
+                            scaleY = it
+                            onScaleChange(it, it)
+                        },
+                        valueRange = 0.5f..2.5f,
+                        modifier = Modifier.height(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Width Stretch", style = MaterialTheme.typography.bodySmall)
+                        Text("${String.format(Locale.US, "%.2f", scaleX)}x", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Slider(
+                        value = scaleX,
+                        onValueChange = {
+                            scaleX = it
+                            onScaleChange(scaleX, scaleY)
+                        },
+                        valueRange = 0.5f..2.5f,
+                        modifier = Modifier.height(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Height Stretch", style = MaterialTheme.typography.bodySmall)
+                        Text("${String.format(Locale.US, "%.2f", scaleY)}x", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Slider(
+                        value = scaleY,
+                        onValueChange = {
+                            scaleY = it
+                            onScaleChange(scaleX, scaleY)
+                        },
+                        valueRange = 0.5f..2.5f,
+                        modifier = Modifier.height(20.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
-                Slider(
-                    value = scaleY,
-                    onValueChange = {
-                        scaleY = it
-                        onScaleChange(scaleX, scaleY)
-                    },
-                    valueRange = 0.5f..2.5f,
-                    modifier = Modifier.height(20.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
 
                 OutlinedButton(
                     onClick = {
@@ -120,19 +203,6 @@ fun StreamSettingsDialog(
                     Text("Reset Scaling")
                 }
 
-                // FIX: Use HorizontalDivider
-                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
-
-                Button(
-                    onClick = {
-                        onDismiss()
-                        onOpenCalibration()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                ) {
-                    Text("Calibrate Touch")
-                }
                 Spacer(modifier = Modifier.height(16.dp))
 
                 TextButton(onClick = onDismiss) {

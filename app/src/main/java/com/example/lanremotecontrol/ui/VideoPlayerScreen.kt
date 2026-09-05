@@ -7,11 +7,19 @@ import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.border
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -38,15 +46,18 @@ fun VideoPlayerScreen(
 
     // Observe Connection State for Auto-Exit
     val isConnected by viewModel.isConnected.collectAsState()
+    val isVideoReceiving by viewModel.isVideoReceiving.collectAsState()
+    val latencyMs by viewModel.latencyMs.collectAsState()
 
-    // UI States
     var showSettings by remember { mutableStateOf(false) }
-    var showCalibration by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
+    var showBorder by remember { mutableStateOf(false) }
+    var showLatency by remember { mutableStateOf(true) }
 
     // Scaling States (Manual Zoom/Stretch)
     var scaleX by remember { mutableFloatStateOf(1f) }
     var scaleY by remember { mutableFloatStateOf(1f) }
+    var isAspectLocked by remember { mutableStateOf(true) }
 
     // Touch States
     var viewWidth by remember { mutableFloatStateOf(1f) }
@@ -78,9 +89,7 @@ fun VideoPlayerScreen(
 
     // 3. Back Button Logic
     BackHandler {
-        if (showCalibration) {
-            showCalibration = false
-        } else if (isFullscreen) {
+        if (isFullscreen) {
             isFullscreen = false
         } else {
             viewModel.disconnect()
@@ -103,6 +112,7 @@ fun VideoPlayerScreen(
         AndroidView(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
+                    keepScreenOn = true
                     holder.addCallback(object : SurfaceHolder.Callback {
                         override fun surfaceCreated(h: SurfaceHolder) { viewModel.attachSurface(h.surface) }
                         override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, he: Int) {}
@@ -117,22 +127,37 @@ fun VideoPlayerScreen(
                     scaleX = scaleX,
                     scaleY = scaleY
                 )
+                .then(if (showBorder) Modifier.border(1.dp, Color.White.copy(alpha = 0.3f)) else Modifier)
         )
 
-        // B. Touch Layer (Full Screen - Not Scaled, mapped via Calibrator)
-        if (!showCalibration) {
+        // Loading Indicator
+        if (!isVideoReceiving) {
             Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInteropFilter { event ->
-                        val pointers = ArrayList<TouchPointer>()
-                        for (i in 0 until event.pointerCount) {
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
 
-                            // Use Calibrator to map raw touch to video coordinates
-                            val (calX, calY) = TouchCalibrator.mapCoordinate(event.getX(i), event.getY(i))
+        // B. Touch Layer (Full Screen - mapped via mathematical Calibrator)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInteropFilter { event ->
+                    val pointers = ArrayList<TouchPointer>()
+                    for (i in 0 until event.pointerCount) {
 
-                            pointers.add(TouchPointer(event.getPointerId(i), calX, calY))
-                        }
+                        // Use Calibrator to map raw touch to video coordinates, factoring in zoom
+                        val (calX, calY) = TouchCalibrator.mapCoordinate(
+                            event.getX(i), 
+                            event.getY(i), 
+                            scaleX, 
+                            scaleY
+                        )
+
+                        pointers.add(TouchPointer(event.getPointerId(i), calX, calY))
+                    }
 
                         val action = when (event.actionMasked) {
                             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> "DOWN"
@@ -141,46 +166,75 @@ fun VideoPlayerScreen(
                             else -> "UNKNOWN"
                         }
 
-                        if (action == "MOVE") {
-                            val now = System.currentTimeMillis()
-                            if (now - lastMoveTime >= throttleMs) {
-                                SocketManager.sendTouch(TouchData("MOVE", pointers))
-                                lastMoveTime = now
-                            }
-                        } else if (action != "UNKNOWN") {
-                            SocketManager.sendTouch(TouchData(action, pointers))
+                    if (action == "MOVE") {
+                        val now = System.currentTimeMillis()
+                        if (now - lastMoveTime >= throttleMs) {
+                            SocketManager.sendTouch(TouchData("MOVE", pointers))
+                            lastMoveTime = now
                         }
-                        true
+                    } else if (action != "UNKNOWN") {
+                        SocketManager.sendTouch(TouchData(action, pointers))
                     }
-            )
+                    true
+                }
+        )
+
+        // C. Latency Overlay (Top Right)
+        if (isVideoReceiving && showLatency) {
+            val latencyColor = when {
+                latencyMs <= 100 -> Color(0xFF4CAF50) // Green
+                latencyMs <= 180 -> Color(0xFFFFC107) // Yellow
+                else -> Color(0xFFF44336) // Red
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .shadow(4.dp, RoundedCornerShape(50), spotColor = Color.Black.copy(alpha = 0.25f))
+                        .background(
+                            brush = Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0.15f),
+                                    Color.White.copy(alpha = 0.05f)
+                                )
+                            ),
+                            shape = RoundedCornerShape(50)
+                        )
+                        .border(
+                            width = 0.5.dp,
+                            color = Color.White.copy(alpha = 0.3f),
+                            shape = RoundedCornerShape(50)
+                        )
+                        .background(Color.Black.copy(alpha = 0.2f), shape = RoundedCornerShape(50))
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "${latencyMs}ms",
+                        color = latencyColor,
+                        style = androidx.compose.material3.MaterialTheme.typography.labelMedium.copy(
+                            shadow = androidx.compose.ui.graphics.Shadow(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+                                blurRadius = 4f
+                            )
+                        )
+                    )
+                }
+            }
         }
 
-        // C. Draggable Settings FAB (Visible unless calibrating)
-        //XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-        /*
-        if (!showCalibration) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                DraggableSettingsFab(onClick = { showSettings = true })
-            }
-        }*/
+        // D. Draggable Settings FAB
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .safeDrawingPadding() // ✅ SAFE HERE
         ) {
             DraggableSettingsFab(onClick = { showSettings = true })
-        }
-
-
-        //XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-
-
-        // D. Calibration Overlay (On Top)
-        if (showCalibration) {
-            CalibrationOverlay(
-                onCalibrationComplete = { showCalibration = false },
-                onCancel = { showCalibration = false }
-            )
         }
     }
 
@@ -190,12 +244,17 @@ fun VideoPlayerScreen(
             currentFullscreenState = isFullscreen,
             currentScaleX = scaleX,
             currentScaleY = scaleY,
+            isAspectLocked = isAspectLocked,
+            showBorder = showBorder,
+            showLatency = showLatency,
             onFullscreenChange = { isFullscreen = it },
             onScaleChange = { x, y ->
                 scaleX = x
                 scaleY = y
             },
-            onOpenCalibration = { showCalibration = true },
+            onAspectLockChange = { isAspectLocked = it },
+            onBorderChange = { showBorder = it },
+            onLatencyChange = { showLatency = it },
             onDismiss = { showSettings = false }
         )
     }

@@ -23,6 +23,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import com.example.lanremotecontrol.viewmodel.ClientViewModel
 
 @Composable
@@ -33,6 +37,7 @@ fun ClientScreen(
     val hosts by viewModel.hosts.collectAsState()
     val status by viewModel.status.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
+    val isPinRequested by viewModel.isPinRequested.collectAsState()
 
     LaunchedEffect(Unit) { viewModel.startScanning() }
     LaunchedEffect(isConnected) { if (isConnected) onConnected() }
@@ -130,6 +135,46 @@ fun ClientScreen(
                 }
             }
         }
+    }
+
+    if (isPinRequested) {
+        var pinInput by remember { mutableStateOf("") }
+        val focusRequester = remember { FocusRequester() }
+
+        LaunchedEffect(Unit) {
+            // Slight delay ensures the dialog is fully composed before requesting focus
+            kotlinx.coroutines.delay(100)
+            focusRequester.requestFocus()
+        }
+
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelPin() },
+            title = { Text("Authentication Required") },
+            text = {
+                Column {
+                    Text("Please enter the 4-digit PIN displayed on the Host device.", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = { pinInput = it },
+                        label = { Text("PIN") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        modifier = Modifier.focusRequester(focusRequester)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.submitPin(pinInput) }) {
+                    Text("Submit")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.cancelPin() }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

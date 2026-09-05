@@ -16,6 +16,8 @@ import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.os.Bundle
 import android.util.Log
 import com.example.lanremotecontrol.MainActivity
 import com.example.lanremotecontrol.network.SocketManager
@@ -35,11 +37,38 @@ class ScreenCaptureService : Service() {
     private var mediaCodec: MediaCodec? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var isStreaming = false
+    private var wakeLock: PowerManager.WakeLock? = null
 
-    private val width = 720
-    private val height = 1280
+    private var width = 720
+    private var height = 1280
     private val bitrate = 2000000
     private val fps = 30
+
+    override fun onCreate() {
+        super.onCreate()
+        calculateCaptureResolution()
+    }
+
+    private fun calculateCaptureResolution() {
+        val metrics = resources.displayMetrics
+        val w = metrics.widthPixels.toFloat()
+        val h = metrics.heightPixels.toFloat()
+
+        // We want to scale down to save bandwidth but keep the exact aspect ratio.
+        // Let's use 1280 as the max dimension to match previous performance.
+        val maxDimension = 1280f
+        val scale = if (h > w) maxDimension / h else maxDimension / w
+
+        var newW = (w * scale).toInt()
+        var newH = (h * scale).toInt()
+
+        // MediaCodec AVC encoder requires even dimensions, usually multiples of 2 (or 16).
+        if (newW % 2 != 0) newW--
+        if (newH % 2 != 0) newH--
+
+        width = newW
+        height = newH
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -51,6 +80,14 @@ class ScreenCaptureService : Service() {
 
         isServiceRunning = true
         startForegroundServiceNotification()
+
+        val pm = getSystemService(PowerManager::class.java)
+        @Suppress("DEPRECATION")
+        wakeLock = pm.newWakeLock(
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            "LanRemoteControl:KeepAwake"
+        )
+        wakeLock?.acquire()
 
         val resultCode = permissionResultCode
         val data = permissionResultData
@@ -94,6 +131,19 @@ class ScreenCaptureService : Service() {
                 inputSurface, null, null
             )
             isStreaming = true
+            
+            // Hook up ABR (Adaptive Bitrate) listener
+            SocketManager.onConfigReceived = { config ->
+                try {
+                    val params = Bundle()
+                    params.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, config.bitrate)
+                    mediaCodec?.setParameters(params)
+                    Log.d("ScreenCapture", "ABR: Applied new bitrate -> ${config.bitrate}")
+                } catch (e: Exception) {
+                    Log.e("ScreenCapture", "ABR Error", e)
+                }
+            }
+            
             startEncodingLoop()
         } catch (e: Exception) {
             stopSelf()
@@ -158,6 +208,10 @@ class ScreenCaptureService : Service() {
 
             // FIX: Use modern stopForeground
             stopForeground(STOP_FOREGROUND_REMOVE)
+
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
 
         } catch (e: Exception) { }
         super.onDestroy()

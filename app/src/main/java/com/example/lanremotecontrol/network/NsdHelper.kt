@@ -11,7 +11,16 @@ class NsdHelper(context: Context) {
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val SERVICE_TYPE = "_lanremote._tcp."
-    private val SERVICE_NAME = "LanRemoteHost"
+    private val SERVICE_NAME: String
+        get() {
+            val manufacturer = Build.MANUFACTURER ?: "Unknown"
+            val model = Build.MODEL ?: "Device"
+            return if (model.lowercase().startsWith(manufacturer.lowercase())) {
+                model.replaceFirstChar { it.uppercase() }
+            } else {
+                "${manufacturer.replaceFirstChar { it.uppercase() }} $model"
+            }
+        }
 
     private var registrationListener: NsdManager.RegistrationListener? = null
 

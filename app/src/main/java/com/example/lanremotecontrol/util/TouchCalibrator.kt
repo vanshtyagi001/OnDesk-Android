@@ -9,51 +9,35 @@ data class CalibrationData(
 
 object TouchCalibrator {
 
-    // Default: Assume video fills whole screen (1:1 mapping)
-    private var data = CalibrationData()
     private var viewWidth: Float = 1f
     private var viewHeight: Float = 1f
 
     fun setViewSize(w: Float, h: Float) {
-        viewWidth = w
-        viewHeight = h
-        // Reset default if not calibrated yet
-        if (data.videoWidth == 1f) {
-            data = CalibrationData(0f, 0f, w, h)
-        }
+        if (w > 0) viewWidth = w
+        if (h > 0) viewHeight = h
     }
 
-    fun updateCalibration(topLeftX: Float, topLeftY: Float, bottomRightX: Float, bottomRightY: Float) {
-        val w = bottomRightX - topLeftX
-        val h = bottomRightY - topLeftY
+    /**
+     * Mathematically maps raw screen touches into the 0.0 - 1.0 coordinate space expected by the host.
+     * This factors in the visual scaleX/scaleY applied to the video layer, ensuring 100% precision.
+     */
+    fun mapCoordinate(rawX: Float, rawY: Float, scaleX: Float, scaleY: Float): Pair<Float, Float> {
+        // The scaling originates from the center of the screen
+        val centerX = viewWidth / 2f
+        val centerY = viewHeight / 2f
 
-        // Save the active video area
-        data = CalibrationData(
-            xOffset = topLeftX,
-            yOffset = topLeftY,
-            videoWidth = w,
-            videoHeight = h
-        )
-    }
+        // Invert the scaling to find where the touch lands on the original unscaled surface
+        val unscaledX = (rawX - centerX) / scaleX + centerX
+        val unscaledY = (rawY - centerY) / scaleY + centerY
 
-    fun mapCoordinate(rawX: Float, rawY: Float): Pair<Float, Float> {
-        // 1. Subtract the black bar offset
-        val relativeX = rawX - data.xOffset
-        val relativeY = rawY - data.yOffset
+        // Normalize to 0.0 - 1.0
+        val normalizedX = unscaledX / viewWidth
+        val normalizedY = unscaledY / viewHeight
 
-        // 2. Normalize based on ACTUAL video size, not screen size
-        val normalizedX = relativeX / data.videoWidth
-        val normalizedY = relativeY / data.videoHeight
-
-        // 3. Clamp (Safety)
-        // Ensure we don't send < 0.0 or > 1.0 if user touches black bars
+        // Clamp (Safety) so we don't send out-of-bounds coordinates
         val safeX = normalizedX.coerceIn(0f, 1f)
         val safeY = normalizedY.coerceIn(0f, 1f)
 
         return Pair(safeX, safeY)
-    }
-
-    fun reset() {
-        data = CalibrationData(0f, 0f, viewWidth, viewHeight)
     }
 }

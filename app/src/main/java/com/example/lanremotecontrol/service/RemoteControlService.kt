@@ -6,6 +6,8 @@ import android.content.Intent
 import android.graphics.Path
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import android.view.WindowManager
+import android.util.DisplayMetrics
 import com.example.lanremotecontrol.network.SocketManager
 import com.example.lanremotecontrol.network.TouchData
 import kotlin.math.abs
@@ -43,7 +45,10 @@ class RemoteControlService : AccessibilityService() {
     }
 
     private fun processTouch(touch: TouchData) {
-        val metrics = resources.displayMetrics
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        
         val w = metrics.widthPixels.toFloat()
         val h = metrics.heightPixels.toFloat()
 
@@ -58,6 +63,7 @@ class RemoteControlService : AccessibilityService() {
                         val realY = (ptr.y * h).coerceIn(0f, h)
                         val path = Path()
                         path.moveTo(realX, realY)
+                        path.lineTo(realX + 1f, realY + 1f) // Ensure length > 0
                         activePaths[ptr.id] = path
                         startCoordinates[ptr.id] = Pair(realX, realY)
                     }
@@ -121,8 +127,10 @@ class RemoteControlService : AccessibilityService() {
     private fun dispatchTap(x: Float, y: Float) {
         val path = Path()
         path.moveTo(x, y)
+        // Micro-movement to guarantee Android registers the stroke length > 0
+        path.lineTo(x + 1f, y + 1f)
         val builder = GestureDescription.Builder()
-        val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 100) // 100ms for reliable tap
         builder.addStroke(stroke)
         dispatchGesture(builder.build(), null, null)
     }

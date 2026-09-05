@@ -9,6 +9,7 @@ import com.example.lanremotecontrol.network.NsdHelper
 import com.example.lanremotecontrol.network.SocketManager
 import com.example.lanremotecontrol.service.RemoteControlService
 import com.example.lanremotecontrol.service.ScreenCaptureService
+import com.example.lanremotecontrol.service.StealthModeService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -27,6 +28,33 @@ class HostViewModel(application: Application) : AndroidViewModel(application) {
     private val _isClientConnected = MutableStateFlow(false)
     val isClientConnected = _isClientConnected.asStateFlow()
 
+    private val _isPinEnabled = MutableStateFlow(false)
+    val isPinEnabled = _isPinEnabled.asStateFlow()
+
+    private val _currentPin = MutableStateFlow("1234")
+    val currentPin = _currentPin.asStateFlow()
+
+    private val _isStealthModeEnabled = MutableStateFlow(false)
+    val isStealthModeEnabled = _isStealthModeEnabled.asStateFlow()
+
+    fun togglePinSecurity(enabled: Boolean) {
+        _isPinEnabled.value = enabled
+        if (enabled) generateNewPin()
+    }
+
+    fun generateNewPin() {
+        val randomPin = (1000..9999).random().toString()
+        _currentPin.value = randomPin
+    }
+
+    fun toggleStealthMode(enabled: Boolean) {
+        _isStealthModeEnabled.value = enabled
+        if (_isClientConnected.value) {
+            val intent = Intent(context, StealthModeService::class.java)
+            if (enabled) context.startService(intent) else context.stopService(intent)
+        }
+    }
+
     fun startHosting() {
         val ip = NetworkUtils.getLocalIpAddress()
         _serverIp.value = ip
@@ -42,6 +70,7 @@ class HostViewModel(application: Application) : AndroidViewModel(application) {
         SocketManager.onClientDisconnected = {
             _isClientConnected.value = false
             _status.value = "Disconnected. Waiting for new client..."
+            context.stopService(Intent(context, StealthModeService::class.java))
             waitForConnection()
         }
 
@@ -51,6 +80,7 @@ class HostViewModel(application: Application) : AndroidViewModel(application) {
     fun stopHosting() {
         _isClientConnected.value = false
         _status.value = "Stopped"
+        context.stopService(Intent(context, StealthModeService::class.java))
         SocketManager.close()
         nsdHelper.tearDown()
     }
@@ -64,22 +94,37 @@ class HostViewModel(application: Application) : AndroidViewModel(application) {
             val success = SocketManager.startServer()
 
             if (success) {
-                _status.value = "Client Connected!"
-                _isClientConnected.value = true
+                _status.value = "Authenticating client..."
+                val authSuccess = SocketManager.performHostHandshake(_isPinEnabled.value, _currentPin.value)
+                
+                if (authSuccess) {
+                    _status.value = "Client Connected!"
+                    _isClientConnected.value = true
 
-                // CRITICAL FIX: Trigger RemoteControlService to re-bind its listener
-                // startService() on an already running Accessibility Service triggers onStartCommand
-                try {
-                    val intent = Intent(context, RemoteControlService::class.java)
-                    context.startService(intent)
-                } catch (e: Exception) {
-                    // On some Android 14+ versions, background start might be restricted
-                    // but since the service is already running, this usually works.
+                    // CRITICAL FIX: Trigger RemoteControlService to re-bind its listener
+                    // startService() on an already running Accessibility Service triggers onStartCommand
+                    try {
+                        val intent = Intent(context, RemoteControlService::class.java)
+                        context.startService(intent)
+                    } catch (e: Exception) {
+                        // On some Android 14+ versions, background start might be restricted
+                        // but since the service is already running, this usually works.
+                    }
+
+                    if (_isStealthModeEnabled.value) {
+                        context.startService(Intent(context, StealthModeService::class.java))
+                    }
+
+                    SocketManager.startListeningForPackets()
+                } else {
+                    _status.value = "Authentication Failed."
+                    SocketManager.close()
+                    kotlinx.coroutines.delay(2000)
+                    waitForConnection()
                 }
-
-                SocketManager.startListeningForPackets()
             } else {
-                _status.value = "Server bind failed. Retrying..."
+                _status.value = "Server bind failed."
+                SocketManager.close()
                 kotlinx.coroutines.delay(2000)
                 waitForConnection()
             }
@@ -92,6 +137,7 @@ class HostViewModel(application: Application) : AndroidViewModel(application) {
         if (!ScreenCaptureService.isServiceRunning) {
             nsdHelper.tearDown()
             SocketManager.close()
+            context.stopService(Intent(context, StealthModeService::class.java))
         }
     }
 }

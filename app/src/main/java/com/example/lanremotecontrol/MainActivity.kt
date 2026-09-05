@@ -8,6 +8,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -45,7 +49,14 @@ fun AppNavigation() {
     // This prevents the connection from dropping when navigating.
     val sharedClientViewModel: ClientViewModel = viewModel()
 
-    NavHost(navController = navController, startDestination = "home") {
+    NavHost(
+        navController = navController, 
+        startDestination = "home",
+        enterTransition = { slideInHorizontally(initialOffsetX = { it / 4 }) + fadeIn() },
+        exitTransition = { fadeOut() },
+        popEnterTransition = { fadeIn() },
+        popExitTransition = { slideOutHorizontally(targetOffsetX = { it / 4 }) + fadeOut() }
+    ) {
 
         // 1. Home Screen
         composable("home") {
@@ -77,8 +88,8 @@ fun AppNavigation() {
             VideoPlayerScreen(
                 viewModel = sharedClientViewModel,
                 onNavigateBack = {
-                    // Pop back to Home, removing the player/client states from stack
-                    navController.popBackStack("home", inclusive = false)
+                    // Pop back to Client scanning screen
+                    navController.popBackStack("client", inclusive = false)
                 }
             )
         }

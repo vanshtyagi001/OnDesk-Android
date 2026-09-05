@@ -15,6 +15,12 @@ import android.provider.Settings
 import android.text.TextUtils // Fixed: Added Import
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,8 +30,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.SettingsAccessibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material.icons.rounded.SignalWifi4Bar
 import androidx.compose.material3.*
@@ -54,13 +62,24 @@ fun HostScreen(viewModel: HostViewModel = viewModel()) {
 
     val ipAddress by viewModel.serverIp.collectAsState()
     val isClientConnected by viewModel.isClientConnected.collectAsState()
+    val isPinEnabled by viewModel.isPinEnabled.collectAsState()
+    val currentPin by viewModel.currentPin.collectAsState()
+    val isStealthModeEnabled by viewModel.isStealthModeEnabled.collectAsState()
 
     // --- State ---
     var isAccessibilityEnabled by remember { mutableStateOf(false) }
     var showAccessibilityDialog by remember { mutableStateOf(false) }
+    var showOverlayPermissionDialog by remember { mutableStateOf(false) }
     var isBatteryIgnored by remember { mutableStateOf(false) }
 
     // --- Logic ---
+    fun tryToggleStealthMode(enabled: Boolean) {
+        if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+            showOverlayPermissionDialog = true
+        } else {
+            viewModel.toggleStealthMode(enabled)
+        }
+    }
     fun checkPermissions() {
         isAccessibilityEnabled = isAccessibilityServiceEnabled(context, RemoteControlService::class.java)
         if (isAccessibilityEnabled) showAccessibilityDialog = false
@@ -151,51 +170,84 @@ fun HostScreen(viewModel: HostViewModel = viewModel()) {
             Spacer(modifier = Modifier.height(24.dp))
 
             // 3. Configuration / Warnings
-            if (!isSessionActive) {
-                if (!isAccessibilityEnabled) {
-                    WarningCard(
-                        title = "Remote Control Disabled",
-                        text = "Accessibility permission is required.",
-                        buttonText = "Enable",
-                        onClick = { showAccessibilityDialog = true }
+            AnimatedContent(
+                targetState = isSessionActive,
+                transitionSpec = {
+                    (fadeIn() + slideInVertically(initialOffsetY = { 50 })).togetherWith(
+                        fadeOut() + slideOutVertically(targetOffsetY = { -50 })
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
+                },
+                label = "HostStateTransition",
+                modifier = Modifier.fillMaxWidth().weight(1f)
+            ) { active ->
+                if (!active) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (!isAccessibilityEnabled) {
+                            WarningCard(
+                                title = "Remote Control Disabled",
+                                text = "Accessibility permission is required.",
+                                buttonText = "Enable",
+                                onClick = { showAccessibilityDialog = true }
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
 
-                // Battery Setting
-                BatterySettingCard(
-                    isIgnored = isBatteryIgnored,
-                    onToggle = {
-                        @SuppressLint("BatteryLife")
-                        if (!isBatteryIgnored && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            try {
-                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                                intent.data = Uri.parse("package:${context.packageName}")
-                                context.startActivity(intent)
-                            } catch (e: Exception) {
-                                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        // Battery Setting
+                        BatterySettingCard(
+                            isIgnored = isBatteryIgnored,
+                            onToggle = {
+                                @SuppressLint("BatteryLife")
+                                if (!isBatteryIgnored && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                    try {
+                                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                        intent.data = Uri.parse("package:${context.packageName}")
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                    }
+                                } else {
+                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                }
                             }
-                        } else {
-                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Security Setting
+                        SecurityCard(
+                            isPinEnabled = isPinEnabled,
+                            currentPin = currentPin,
+                            onToggle = { viewModel.togglePinSecurity(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Stealth Mode Setting
+                        StealthModeCard(
+                            isStealthModeEnabled = isStealthModeEnabled,
+                            onToggle = { tryToggleStealthMode(it) }
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.Bottom
+                    ) {
+                        Button(
+                            onClick = {
+                                val intent = Intent(context, ScreenCaptureService::class.java)
+                                context.stopService(intent)
+                                viewModel.stopHosting()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.PowerSettingsNew, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Stop Sharing Session", fontSize = 18.sp)
                         }
                     }
-                )
-            } else {
-                // STOP BUTTON
-                Spacer(modifier = Modifier.weight(1f))
-                Button(
-                    onClick = {
-                        val intent = Intent(context, ScreenCaptureService::class.java)
-                        context.stopService(intent)
-                        viewModel.stopHosting()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.PowerSettingsNew, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Stop Sharing Session", fontSize = 18.sp)
                 }
             }
         }
@@ -216,6 +268,25 @@ fun HostScreen(viewModel: HostViewModel = viewModel()) {
             },
             dismissButton = {
                 TextButton(onClick = { showAccessibilityDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showOverlayPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { },
+            icon = { Icon(Icons.Default.VisibilityOff, contentDescription = null) },
+            title = { Text("Overlay Permission Required") },
+            text = { Text("Stealth Mode requires the 'Display over other apps' permission to securely dim the screen.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOverlayPermissionDialog = false
+                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                    context.startActivity(intent)
+                }) { Text("Open Settings") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverlayPermissionDialog = false }) { Text("Cancel") }
             }
         )
     }
@@ -315,6 +386,59 @@ fun BatterySettingCard(isIgnored: Boolean, onToggle: () -> Unit) {
                 Text(if (isIgnored) "Optimized for stability" else "Enable to prevent disconnects", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
             Switch(checked = isIgnored, onCheckedChange = { onToggle() })
+        }
+    }
+}
+
+@Composable
+fun SecurityCard(isPinEnabled: Boolean, currentPin: String, onToggle: (Boolean) -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Lock, contentDescription = null, tint = if (isPinEnabled) Color(0xFF4CAF50) else Color.Gray)
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("PIN Authentication", style = MaterialTheme.typography.titleSmall)
+                    Text(if (isPinEnabled) "Client must enter PIN" else "Anyone can connect", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                }
+                Switch(checked = isPinEnabled, onCheckedChange = { onToggle(it) })
+            }
+            if (isPinEnabled) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(8.dp))
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(currentPin, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, letterSpacing = 8.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StealthModeCard(isStealthModeEnabled: Boolean, onToggle: (Boolean) -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.VisibilityOff, contentDescription = null, tint = if (isStealthModeEnabled) Color(0xFF4CAF50) else Color.Gray)
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Stealth Mode", style = MaterialTheme.typography.titleSmall)
+                Text(if (isStealthModeEnabled) "Screen dims during connection" else "Screen stays bright", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+            }
+            Switch(checked = isStealthModeEnabled, onCheckedChange = { onToggle(it) })
         }
     }
 }

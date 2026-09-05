@@ -90,7 +90,7 @@ fun HelpScreen(onNavigateBack: () -> Unit) {
                 content = "• Tap: Click on screen.\n" +
                         "• Swipe/Scroll: Drag one finger.\n" +
                         "• Zoom: Pinch with two fingers.\n" +
-                        "• Settings: Tap the Floating Gear icon to adjust scaling or Calibrate touch accuracy."
+                        "• Settings: Tap the Floating Gear icon to adjust scaling."
             )
 
             // 5. Troubleshooting
@@ -98,8 +98,7 @@ fun HelpScreen(onNavigateBack: () -> Unit) {
                 title = "5. Troubleshooting",
                 icon = Icons.Rounded.Build,
                 content = "• Black Screen? Minimize the Client app and reopen it to resync the video.\n" +
-                        "• Disconnects? On Host, enable 'Run in Background' switch to prevent battery optimization kills.\n" +
-                        "• Touch Inaccurate? Open Settings > Calibrate Touch."
+                        "• Disconnects? On Host, enable 'Run in Background' switch to prevent battery optimization kills."
             )
 
             Spacer(modifier = Modifier.height(32.dp))

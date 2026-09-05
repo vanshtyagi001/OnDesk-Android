@@ -17,6 +17,7 @@
     <!-- REQUIRED for Android 14+ Screen Sharing -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Legacy Audio (Optional but good to keep) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -62,6 +63,11 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- Service: Stealth Mode Dimmer -->
+        <service
+            android:name=".service.StealthModeService"
+            android:exported="false" />
 
     </application>
 
